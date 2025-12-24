@@ -1,0 +1,315 @@
+name: VPS
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '50 */5 * * *'  # كل 5 ساعات و50 دقيقة
+
+jobs:
+  vps-with-bot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v3
+        
+      - name: Install Essential Packages (Fixed)
+        run: |
+          echo "📦 تثبيت الحزم الأساسية فقط..."
+          
+          # التحديث الأساسي
+          sudo apt update -y
+          sudo apt upgrade -y -q
+          
+          # الحزم الأساسية فقط (موجودة فعلاً)
+          sudo apt install -y \
+            python3 \
+            python3-pip \
+            python3-venv \
+            git \
+            curl \
+            wget \
+            htop \
+            nano \
+            vim \
+            tmux \
+            build-essential \
+            software-properties-common \
+            openssh-server \
+            net-tools \
+            iputils-ping \
+            traceroute \
+            jq \
+            bc \
+            screen \
+            ffmpeg \
+            tree \
+            locate \
+            mlocate \
+            gcc \
+            g++ \
+            make \
+            cmake \
+            libssl-dev \
+            libffi-dev \
+            zip \
+            unzip \
+            p7zip \
+            fail2ban \
+            ufw \
+            nginx \
+            sqlite3 \
+            inotify-tools
+          
+          echo "✅ تم تثبيت الحزم الأساسية بنجاح!"
+          
+      - name: Install Python Libraries
+        run: |
+          echo "🐍 تثبيت مكتبات بايثون..."
+          pip3 install --upgrade pip
+          
+          # مكتبات بايثون الأساسية فقط
+          pip3 install \
+            numpy \
+            pandas \
+            matplotlib \
+            requests \
+            beautifulsoup4 \
+            pillow \
+            python-telegram-bot \
+            pyautogui \
+            schedule \
+            python-dotenv \
+            psutil \
+            aiohttp \
+            asyncio
+          
+          echo "✅ تم تثبيت مكتبات بايثون!"
+          
+      - name: Configure SSH Server
+        run: |
+          echo "🔐 إعداد خادم SSH..."
+          sudo systemctl enable ssh
+          sudo systemctl start ssh
+          
+          # تعيين كلمة مرور آمنة
+          SSH_PASSWORD="VPS@Secure2024"
+          echo "root:$SSH_PASSWORD" | sudo chpasswd
+          
+          # تكوين SSH
+          sudo tee -a /etc/ssh/sshd_config << EOF
+          PermitRootLogin yes
+          PasswordAuthentication yes
+          ClientAliveInterval 60
+          ClientAliveCountMax 3
+          X11Forwarding yes
+          AllowTcpForwarding yes
+          GatewayPorts yes
+          EOF
+          
+          sudo systemctl restart ssh
+          echo "✅ SSH جاهز: root@[IP] | كلمة المرور: $SSH_PASSWORD"
+          
+      - name: Install & Configure Tailscale
+        run: |
+          echo "🌐 تثبيت وتكوين Tailscale..."
+          
+          # تثبيت Tailscale
+          curl -fsSL https://tailscale.com/install.sh | sh
+          
+          # تشغيل Tailscale
+          sudo tailscale up \
+            --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} \
+            --hostname=github-vps-$(date +%Y%m%d) \
+            --accept-routes=true \
+            --accept-dns=true
+          
+          # الحصول على IP
+          TAILSCALE_IP=$(tailscale ip -4 | head -n1)
+          echo "🎯 IP الخاص بك: $TAILSCALE_IP"
+          echo "TAILSCALE_IP=$TAILSCALE_IP" >> $GITHUB_ENV
+          
+          # حفظ الـ IP في ملف
+          echo $TAILSCALE_IP > /tmp/vps_ip.txt
+          echo "✅ تم حفظ الـ IP: $TAILSCALE_IP"
+          
+      - name: Setup Telegram Bot
+        run: |
+          echo "🤖 إعداد بوت التليجرام..."
+          
+          # إنشاء مجلد البوت
+          mkdir -p /root/tg_bot
+          cd /root/tg_bot
+          
+          # كود البوت البسيط والمضمون
+          cat << 'EOF' > bot.py
+          import os
+          import logging
+          import psutil
+          import subprocess
+          from telegram import Update
+          from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+          
+          # إعدادات البوت
+          TOKEN = "8541707577:AAHivkWH7RdHhKr8zXSuL_roy245LmNYyRo"
+          ADMIN_ID = 7259620384
+          
+          # إعداد التسجيل
+          logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
+          
+          async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+              await update.message.reply_text("🚀 VPS Bot Started!\nاستخدم /help للأوامر")
+          
+          async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+              help_text = """
+              📋 الأوامر المتاحة:
+              
+              /start - بدء البوت
+              /ip - عرض IP السيرفر
+              /status - حالة النظام
+              /ssh - معلومات الاتصال
+              /restart - إعادة التشغيل (للمسؤول)
+              """
+              await update.message.reply_text(help_text)
+          
+          async def ip_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+              try:
+                  result = subprocess.run(['tailscale', 'ip', '-4'], capture_output=True, text=True)
+                  ip = result.stdout.strip()
+                  if ip:
+                      await update.message.reply_text(f"🌐 IP السيرفر: `{ip}`\n\n🔗 للاتصال:\n```bash\nssh root@{ip}\n```")
+                  else:
+                      await update.message.reply_text("❌ لم يتم العثور على IP")
+              except:
+                  await update.message.reply_text("❌ حدث خطأ")
+          
+          async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+              cpu = psutil.cpu_percent()
+              mem = psutil.virtual_memory()
+              disk = psutil.disk_usage('/')
+              
+              status_text = f"""
+              📊 حالة النظام:
+              
+              CPU: {cpu}%
+              الذاكرة: {mem.percent}%
+              التخزين: {disk.percent}%
+              
+              ✅ النظام يعمل بشكل طبيعي
+              """
+              await update.message.reply_text(status_text)
+          
+          async def ssh_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+              result = subprocess.run(['tailscale', 'ip', '-4'], capture_output=True, text=True)
+              ip = result.stdout.strip()
+              if ip:
+                  await update.message.reply_text(f"🔐 معلومات SSH:\n\n📍 IP: `{ip}`\n👤 User: `root`\n🔑 Pass: `VPS@Secure2024`")
+              else:
+                  await update.message.reply_text("❌ لم يتم العثور على IP")
+          
+          async def restart_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+              if update.effective_user.id == ADMIN_ID:
+                  subprocess.run(['systemctl', 'restart', 'ssh'])
+                  await update.message.reply_text("✅ تم إعادة تشغيل الخدمات")
+              else:
+                  await update.message.reply_text("❌ غير مسموح")
+          
+          async def main():
+              app = Application.builder().token(TOKEN).build()
+              
+              app.add_handler(CommandHandler("start", start))
+              app.add_handler(CommandHandler("help", help_cmd))
+              app.add_handler(CommandHandler("ip", ip_cmd))
+              app.add_handler(CommandHandler("status", status_cmd))
+              app.add_handler(CommandHandler("ssh", ssh_cmd))
+              app.add_handler(CommandHandler("restart", restart_cmd))
+              
+              await app.initialize()
+              await app.start()
+              await app.updater.start_polling()
+              
+              # إبقاء البوت يعمل
+              import asyncio
+              await asyncio.Event().wait()
+          
+          if __name__ == '__main__':
+              import asyncio
+              asyncio.run(main())
+          EOF
+          
+          # تشغيل البوت في الخلفية
+          nohup python3 bot.py > bot.log 2>&1 &
+          
+          echo "✅ تم تشغيل بوت التليجرام!"
+          
+      - name: Setup Auto Services
+        run: |
+          echo "⚙️ إعداد الخدمات التلقائية..."
+          
+          # خدمة المراقبة التلقائية
+          cat << 'EOF' > /root/monitor.sh
+          #!/bin/bash
+          
+          # إرسال رسالة إلى التليجرام
+          send_tg() {
+              curl -s -X POST "https://api.telegram.org/bot8541707577:AAHivkWH7RdHhKr8zXSuL_roy245LmNYyRo/sendMessage" \
+                  -d "chat_id=7259620384" \
+                  -d "text=$1" \
+                  -d "parse_mode=Markdown" > /dev/null
+          }
+          
+          # إرسال رسالة البدء
+          send_tg "🚀 *VPS Started Successfully!*\\n\\n✅ System is ready\\n🤖 Bot is online\\n\\nUse /ip to get server IP"
+          
+          while true; do
+              # التحقق من Tailscale
+              if ! tailscale status > /dev/null 2>&1; then
+                  sudo tailscale up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --reset
+                  send_tg "🔌 *Tailscale Reconnected*"
+              fi
+              
+              # التحقق من SSH
+              if ! systemctl is-active --quiet ssh; then
+                  sudo systemctl restart ssh
+              fi
+              
+              sleep 60
+          done
+          EOF
+          
+          chmod +x /root/monitor.sh
+          nohup /root/monitor.sh > /root/monitor.log 2>&1 &
+          
+          echo "✅ تم تشغيل خدمة المراقبة!"
+          
+      - name: Display Connection Info
+        run: |
+          echo " "
+          echo "══════════════════════════════════════════"
+          echo "        🎉 VPS READY FOR USE!            "
+          echo "══════════════════════════════════════════"
+          echo " "
+          echo "📡 للاتصال عبر SSH:"
+          echo "   ssh root@$TAILSCALE_IP"
+          echo "   كلمة المرور: VPS@Secure2024"
+          echo " "
+          echo "🤖 بوت التليجرام:"
+          echo "   Token: 8541707577:AAHivkWH7RdHhKr8zXSuL_roy245LmNYyRo"
+          echo "   Admin ID: 7259620384"
+          echo "   الأوامر: /start /ip /status /ssh"
+          echo " "
+          echo "⏰ المدة: 5 ساعات و 50 دقيقة"
+          echo "🔄 التجديد: كل 5 ساعات تلقائياً"
+          echo " "
+          echo "✅ كل شيء جاهز للتشغيل!"
+          echo " "
+          
+      - name: Keep VPS Alive
+        run: |
+          echo "⏳ السيرفر سيعمل لمدة 350 دقيقة..."
+          echo "🔄 الجلسة التالية تبدأ تلقائياً قبل النهاية"
+          
+          # انتظار حتى نهاية الوقت
+          sleep 21000  # 350 دقيقة
+          
+          echo "✅ انتهت الجلسة. الجلسة التالية تبدأ قريباً..."
