@@ -1,0 +1,68 @@
+name: Persistent-VPS
+on:
+  workflow_dispatch: # لتشغيله يدوياً
+  schedule:
+    - cron: '0 */6 * * *' # يعيد تشغيل نفسه كل 6 ساعات
+
+jobs:
+  secure-vps:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360 # الحد الأقصى للجلسة
+    
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v3
+
+      - name: Restore Data
+        run: |
+          # استعادة البيانات المحفوظة من فرع (branch) خاص بالبيانات
+          git config --global user.name "VPS-Bot"
+          git config --global user.email "bot@vps.com"
+          mkdir -p /root/my_data
+          # إذا كان هناك بيانات سابقة، سيتم سحبها هنا
+
+      - name: Install & Configure SSH
+        run: |
+          sudo apt update -y
+          sudo apt install -y openssh-server
+          sudo systemctl enable ssh
+          sudo systemctl start ssh
+          echo "root:admin@123" | sudo chpasswd
+          echo "PermitRootLogin yes" | sudo tee -a /etc/ssh/sshd_config
+          sudo systemctl restart ssh
+          echo "✅ SSH user: root | pass: admin@123"
+
+      - name: Install Tailscale
+        run: |
+          curl -fsSL https://tailscale.com/install.sh | sh
+          sudo tailscale up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=vps-${{ github.run_id }}
+          tsIP=$(tailscale ip -4 | head -n 1)
+          echo "TAILSCALE_IP=$tsIP" >> $GITHUB_ENV
+          echo "✅ Tailscale IP: $tsIP"
+
+      - name: Background Auto-Save
+        run: |
+          # سكريبت يعمل في الخلفية لحفظ بياناتك كل 10 دقائق
+          cat << 'EOF' > /save_data.sh
+          while true; do
+            echo "Saving data to GitHub..."
+            # أضف هنا الأوامر التي تحفظ ملفاتك المهمة إلى المستودع
+            sleep 600
+          done
+          EOF
+          chmod +x /save_data.sh
+          nohup /save_data.sh > /tmp/save_data.log 2>&1 &
+
+      - name: Keep VPS Alive & Final Save
+        run: |
+          echo "Tailscale VPS ready!"
+          echo "IP: $TAILSCALE_IP"
+          # حلقة الإبقاء على الخادم مع نظام التنبيه قبل الإغلاق
+          current_time=0
+          while [ $current_time -lt 350 ]; do
+            echo "[$(date)] VPS running... (Time: ${current_time} min)"
+            sleep 60
+            current_time=$((current_time + 1))
+          done
+          # قبل الـ 360 دقيقة بـ 10 دقائق، يقوم بحفظ نهائي للبيانات
+          echo "Time limit reaching. Finalizing backup..."
